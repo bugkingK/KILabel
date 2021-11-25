@@ -7,48 +7,18 @@
 
 import UIKit
 
-// TODO: 확인 필요.
-public enum KILinkType: Int {
-    case userHandle
-    case hashTag
-    case url
-}
-
-// TODO: 확인 필요.
-public struct KILinkTypeOption: OptionSet {
-    public let rawValue: Int
-    
-    public static let none = KILinkTypeOption(rawValue: 1 << 0)
-    public static let userHandle = KILinkTypeOption(rawValue: 1 << 1)
-    public static let hashTag = KILinkTypeOption(rawValue: 1 << 2)
-    public static let url = KILinkTypeOption(rawValue: 1 << 3)
-    
-    static let all: KILinkTypeOption = [.none, .userHandle, .hashTag, .url]
-    
-    public init(rawValue: Int) {
-        self.rawValue = rawValue
-    }
-}
-
 open class KILabel: UILabel {
     /**
      * Enable/disable automatic detection of links, hashtags and usernames.
      */
-    @IBInspectable var automaticLinkDetectionEnabled: Bool = true {
+    @IBInspectable public var automaticLinkDetectionEnabled: Bool = true {
         didSet { updateTextStoreWithText() }
     }
-    
-    /**
-     * Specifies the combination of link types to detect. Default value is KILinkTypeAll.
-     */
-    public var linkDetectionTypes: KILinkTypeOption = .all {
-        didSet { updateTextStoreWithText() }
-    }
-    
+
     /**
      * Flag sets if the sytem appearance for URLs should be used (underlined + blue color). Default value is NO.
      */
-    @IBInspectable var systemURLStyle: Bool = false {
+    @IBInspectable public var systemURLStyle: Bool = false {
         didSet { text = text }
     }
     
@@ -57,35 +27,21 @@ open class KILabel: UILabel {
      *
      * @discussion The default value is (0.95, 0.95, 0.95, 1.0).
      */
-    @IBInspectable var selectedLinkBackgroundColor: UIColor? = .init(white: 0.95, alpha: 1)
+    @IBInspectable public var selectedLinkBackgroundColor: UIColor? = .init(white: 0.95, alpha: 1)
+
+    /**
+     * Specifies the combination of link types to detect. Default value is KILinkTypeAll.
+     */
+    public var linkDetectionTypes: KILinkTypeOption = .all {
+        didSet { updateTextStoreWithText() }
+    }
     
     /**
      * Set containing words to be ignored as links, hashtags or usernames.
      *
      * @discussion The comparison between the matches and the ignored words is case insensitive.
      */
-    public var ignoredKeywords: Set<String> {
-        set {
-            self.ignoredKeywords = Set(newValue.map { $0.lowercased() })
-        }
-        get {
-            return self.ignoredKeywords
-        }
-    }
-    
-    // Used to control layout of glyphs and rendering
-    private let layoutManager: NSLayoutManager = .init()
-    // Specifies the space in which to render text
-    private let textContainer: NSTextContainer = .init()
-    // Backing storage for text that is rendered by the layout manager
-    private var textStorage: NSTextStorage?
-    // Dictionary of detected links and their ranges in the text
-    private var linkRanges: [[LinkRangeKey: Any]]?
-    // State used to trag if the user has dragged during a touch
-    private var isTouchMoved: Bool = false
-    // During a touch, range of text that is displayed as selected
-    private var selectedRange: NSRange = .init(location: 0, length: 0)
-    private var _linkTypeAttributes: [KILinkType: Any] = [:]
+    public var ignoredKeywords: Set<String> = .init()
     
     /**
      *  Type for block that is called when a link is tapped
@@ -108,11 +64,40 @@ open class KILabel: UILabel {
      */
     public var urlLinkTapHandler: KILinkTapHandler?
     
-    
-    enum LinkRangeKey: String {
-        case type = "linkType", range, link
+    open override var numberOfLines: Int {
+        didSet { textContainer.maximumNumberOfLines = numberOfLines }
     }
     
+    open override var text: String? {
+        didSet {
+            let text = text ?? ""
+            let attributedText = NSAttributedString(string: text, attributes: attributesFromProperties())
+            updateTextStoreWithAttributedString(attributedString: attributedText)
+        }
+    }
+    
+    open override var attributedText: NSAttributedString? {
+        didSet {
+            if let attributedText = attributedText {
+                updateTextStoreWithAttributedString(attributedString: attributedText)
+            }
+        }
+    }
+    
+    // Used to control layout of glyphs and rendering
+    private let layoutManager: NSLayoutManager = .init()
+    // Specifies the space in which to render text
+    private let textContainer: NSTextContainer = .init()
+    // Backing storage for text that is rendered by the layout manager
+    private var textStorage: NSTextStorage?
+    // Dictionary of detected links and their ranges in the text
+    private var linkRanges: [[LinkRangeKey: Any]]?
+    // State used to trag if the user has dragged during a touch
+    private var isTouchMoved: Bool = false
+    // During a touch, range of text that is displayed as selected
+    private var selectedRange: NSRange = .init(location: 0, length: 0)
+    
+    private var linkTypeAttributes: [KILinkType: Any] = [:]
     
     public override init(frame: CGRect) {
         super.init(frame: frame)
@@ -143,7 +128,23 @@ open class KILabel: UILabel {
         updateTextStoreWithText()
     }
     
-    private func linkAtPoint(location: CGPoint) -> [LinkRangeKey: Any]? {
+    /** ****************************************************************************************** **
+     * @name Geometry
+     ** ****************************************************************************************** **/
+
+    /**
+     * Returns a dictionary of data about the link that it at the location. Returns nil if there is no link.
+     *
+     * A link dictionary contains the following keys:
+     *
+     * - **KILabelLinkTypeKey**, a TDLinkType that identifies the type of link.
+     * - **KILabelRangeKey**, the range of the link within the label text.
+     * - **KILabelLinkKey**, the link text. This could be an URL, handle or hashtag depending on the linkType value.
+     *
+     * @param point The point in the coordinates of the label view.
+     * @return A dictionary containing the link.
+     */
+    public func linkAtPoint(location: CGPoint) -> [LinkRangeKey: Any]? {
         // Do nothing if we have no text
         guard textStorage?.string.count != 0 else {
             return nil
@@ -181,6 +182,39 @@ open class KILabel: UILabel {
         return nil
     }
     
+    /**
+     * Get the current attributes for the given link type.
+     *
+     * @param linkType The link type to get the attributes.
+     * @return A dictionary of text attributes.
+     * @discussion Default attributes contain colored font using the tintColor color property.
+     */
+    public func attributesForLinkType(linkType: KILinkType) -> [NSAttributedString.Key: Any] {
+        guard let attributes = linkTypeAttributes[linkType] as? [NSAttributedString.Key: Any] else {
+            return [.foregroundColor: tintColor ?? .black]
+        }
+        
+        return attributes
+    }
+    
+    /**
+     * Set the text attributes for each link type.
+     *
+     * @param attributes The text attributes.
+     * @param linkType The link type.
+     * @discussion Default attributes contain colored font using the tintColor color property.
+     */
+    public func setAttributes(attributes: [NSAttributedString.Key: Any?]?, linkType: KILinkType) {
+        if let attributes = attributes {
+            linkTypeAttributes[linkType] = attributes
+        } else {
+            linkTypeAttributes.removeValue(forKey: linkType)
+        }
+        
+        // Force refresh text
+        text = text
+    }
+    
     // Applies background color to selected range. Used to hilight touched links
     private func setSelectedRange(range: NSRange) {
         // Remove the current selection if the selection is changing
@@ -198,45 +232,6 @@ open class KILabel: UILabel {
         selectedRange = range;
 
         setNeedsDisplay();
-    }
-    
-    open override var numberOfLines: Int {
-        didSet { textContainer.maximumNumberOfLines = numberOfLines }
-    }
-    
-    open override var text: String? {
-        didSet {
-            let text = text ?? ""
-            let attributedText = NSAttributedString(string: text, attributes: attributesFromProperties())
-            updateTextStoreWithAttributedString(attributedString: attributedText)
-        }
-    }
-    
-    open override var attributedText: NSAttributedString? {
-        didSet {
-            if let attributedText = attributedText {
-                updateTextStoreWithAttributedString(attributedString: attributedText)
-            }
-        }
-    }
-    
-    private func attributesForLinkType(linkType: KILinkType) -> [NSAttributedString.Key: Any] {
-        guard let attributes = _linkTypeAttributes[linkType] as? [NSAttributedString.Key: Any] else {
-            return [.foregroundColor: tintColor ?? .black]
-        }
-        
-        return attributes
-    }
-    
-    private func setAttributes(attributes: [NSAttributedString.Key: Any?]?, linkType: KILinkType) {
-        if let attributes = attributes {
-            _linkTypeAttributes[linkType] = attributes
-        } else {
-            _linkTypeAttributes.removeValue(forKey: linkType)
-        }
-        
-        // Force refresh text
-        text = text
     }
 
     // MARK: - Text Storage Management
@@ -338,7 +333,6 @@ open class KILabel: UILabel {
         return rangesForLinks
     }
     
-    // TODO: 확인필요
     private func getRangesForUserHandles(text: String) -> [[LinkRangeKey: Any]] {
         var rangesForUserHandles: [[LinkRangeKey: Any]] = []
         guard let regex = try? NSRegularExpression(pattern:"(?<!\\w)@([\\w\\_]+)?", options:[]) else {
@@ -362,7 +356,6 @@ open class KILabel: UILabel {
         return rangesForUserHandles
     }
     
-    // TODO: 확인필요
     private func getRangesForHashtags(text: String) -> [[LinkRangeKey: Any]] {
         var rangesForHashtags: [[LinkRangeKey: Any]] = []
         guard let regex = try? NSRegularExpression(pattern:"(?<!\\w)#([\\w\\_]+)?", options:[]) else {
@@ -386,7 +379,6 @@ open class KILabel: UILabel {
         return rangesForHashtags
     }
     
-    // TODO: 확인필요
     private func getRangesForURLs(text: NSAttributedString) -> [[LinkRangeKey: Any]] {
         var rangesForURLs: [[LinkRangeKey: Any]] = []
         guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else {
@@ -430,7 +422,6 @@ open class KILabel: UILabel {
                 continue
             }
             
-            // TODO: 사용자 지정이 들어가는 것 같아..
             let attributes = attributesForLinkType(linkType: linkType)
             // Use our tint color to hilight the link
             attributedString.addAttributes(attributes, range: range)
@@ -606,7 +597,6 @@ extension KILabel: NSLayoutManagerDelegate {
         return !((charIndex > range.location) && (charIndex <= NSMaxRange(range)));
     }
     
-    // TODO: 확인 필요.
     static func sanitizeAttributedString(attributedString: NSAttributedString) -> NSAttributedString {
         // Setup paragraph alignement properly. IB applies the line break style
         // to the attributed string. The problem is that the text container then
