@@ -13,20 +13,13 @@ class ViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        // Do any additional setup after loading the view.
-        label.userHandleLinkTapHandler = { label, string, range in
-            print(string)
-        }
-        
-        label.urlLinkTapHandler = { label, string, range in
-            print(string)
-        }
-        
-        label.hashtagLinkTapHandler = { label, string, range in
-            print(string)
-        }
+        label.delegate = self
     }
+}
 
-
+extension ViewController: KILabelDelegate {
+    func didSelected(_ type: KILinkType, _ label: KILabel, _ string: String, _ range: NSRange) {
+        print(string)
+    }
 }
 

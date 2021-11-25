@@ -43,26 +43,7 @@ open class KILabel: UILabel {
      */
     public var ignoredKeywords: Set<String> = .init()
     
-    /**
-     *  Type for block that is called when a link is tapped
-     *
-     *  @param label  The KILabel in which the tap took place
-     *  @param string Content of the link that was tapped, includes @ or # tokens
-     *  @param range  The range of the string within the label's text
-     */
-    public typealias KILinkTapHandler = (_ label: KILabel, _ string: String, _ range: NSRange) -> ()
-    /**
-     * Callback block for KILinkTypeUserHandle link tap.
-     **/
-    public var userHandleLinkTapHandler: KILinkTapHandler?
-    /**
-     * Callback block for KILinkTypeHashtag link tap.
-     */
-    public var hashtagLinkTapHandler: KILinkTapHandler?
-    /**
-     * Callback block for KILinkTypeURL link tap.
-     */
-    public var urlLinkTapHandler: KILinkTapHandler?
+    public var delegate: KILabelDelegate?
     
     open override var numberOfLines: Int {
         didSet { textContainer.maximumNumberOfLines = numberOfLines }
@@ -204,7 +185,7 @@ open class KILabel: UILabel {
      * @param linkType The link type.
      * @discussion Default attributes contain colored font using the tintColor color property.
      */
-    public func setAttributes(attributes: [NSAttributedString.Key: Any?]?, linkType: KILinkType) {
+    public func setAttributes(attributes: [NSAttributedString.Key: Any]?, linkType: KILinkType) {
         if let attributes = attributes {
             linkTypeAttributes[linkType] = attributes
         } else {
@@ -569,20 +550,7 @@ extension KILabel {
     }
     
     private func receivedActionForLinkType(linkType: KILinkType, string: String, range: NSRange) {
-        switch linkType {
-        case .userHandle:
-            if let handler = userHandleLinkTapHandler {
-                handler(self, string, range)
-            }
-        case .hashTag:
-            if let handler = hashtagLinkTapHandler {
-                handler(self, string, range)
-            }
-        case .url:
-            if let handler = urlLinkTapHandler {
-                handler(self, string, range)
-            }
-        }
+        delegate?.didSelected(linkType, self, string, range)
     }
 }
 
