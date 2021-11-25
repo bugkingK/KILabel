@@ -15,12 +15,19 @@ public enum KILinkType: Int {
 }
 
 // TODO: 확인 필요.
-@objc public enum KILinkTypeOption: Int {
-    case none = 0
-    case userHandle
-    case hashTag
-    case url
-    case all
+public struct KILinkTypeOption: OptionSet {
+    public let rawValue: Int
+    
+    public static let none = KILinkTypeOption(rawValue: 1 << 0)
+    public static let userHandle = KILinkTypeOption(rawValue: 1 << 1)
+    public static let hashTag = KILinkTypeOption(rawValue: 1 << 2)
+    public static let url = KILinkTypeOption(rawValue: 1 << 3)
+    
+    static let all: KILinkTypeOption = [.none, .userHandle, .hashTag, .url]
+    
+    public init(rawValue: Int) {
+        self.rawValue = rawValue
+    }
 }
 
 open class KILabel: UILabel {
@@ -34,7 +41,7 @@ open class KILabel: UILabel {
     /**
      * Specifies the combination of link types to detect. Default value is KILinkTypeAll.
      */
-    @IBInspectable var linkDetectionTypes: KILinkTypeOption = .all {
+    public var linkDetectionTypes: KILinkTypeOption = .all {
         didSet { updateTextStoreWithText() }
     }
     
@@ -50,14 +57,21 @@ open class KILabel: UILabel {
      *
      * @discussion The default value is (0.95, 0.95, 0.95, 1.0).
      */
-    @IBInspectable var selectedLinkBackgroundColor: UIColor = .init(white: 0.95, alpha: 1)
+    @IBInspectable var selectedLinkBackgroundColor: UIColor? = .init(white: 0.95, alpha: 1)
     
     /**
      * Set containing words to be ignored as links, hashtags or usernames.
      *
      * @discussion The comparison between the matches and the ignored words is case insensitive.
      */
-    public var ignoredKeywords: Set<String> = .init()
+    public var ignoredKeywords: Set<String> {
+        set {
+            self.ignoredKeywords = Set(newValue.map { $0.lowercased() })
+        }
+        get {
+            return self.ignoredKeywords
+        }
+    }
     
     // Used to control layout of glyphs and rendering
     private let layoutManager: NSLayoutManager = .init()
@@ -72,6 +86,28 @@ open class KILabel: UILabel {
     // During a touch, range of text that is displayed as selected
     private var selectedRange: NSRange = .init(location: 0, length: 0)
     private var _linkTypeAttributes: [KILinkType: Any] = [:]
+    
+    /**
+     *  Type for block that is called when a link is tapped
+     *
+     *  @param label  The KILabel in which the tap took place
+     *  @param string Content of the link that was tapped, includes @ or # tokens
+     *  @param range  The range of the string within the label's text
+     */
+    public typealias KILinkTapHandler = (_ label: KILabel, _ string: String, _ range: NSRange) -> ()
+    /**
+     * Callback block for KILinkTypeUserHandle link tap.
+     **/
+    public var userHandleLinkTapHandler: KILinkTapHandler?
+    /**
+     * Callback block for KILinkTypeHashtag link tap.
+     */
+    public var hashtagLinkTapHandler: KILinkTapHandler?
+    /**
+     * Callback block for KILinkTypeURL link tap.
+     */
+    public var urlLinkTapHandler: KILinkTapHandler?
+    
     
     enum LinkRangeKey: String {
         case type = "linkType", range, link
@@ -107,35 +143,61 @@ open class KILabel: UILabel {
         updateTextStoreWithText()
     }
     
-    private func linkAtPoint(location: CGPoint) -> [[LinkRangeKey: Any]]? {
+    private func linkAtPoint(location: CGPoint) -> [LinkRangeKey: Any]? {
         // Do nothing if we have no text
         guard textStorage?.string.count != 0 else {
             return nil
         }
         
+        var location = location
         // Work out the offset of the text in the view
-//        let textOffset = calcGlyphsPositionInView()
+        let textOffset = calcGlyphsPositionInView()
         
-        return []
+        // Get the touch location and use text offset to convert to text cotainer coords
+        location.x -= textOffset.x;
+        location.y -= textOffset.y;
+        
+        let touchedChar = layoutManager.glyphIndex(for: location, in: textContainer)
+        // If the touch is in white space after the last glyph on the line we don't
+        // count it as a hit on the text
+        var lineRange: NSRange = .init(location: 0, length: 0)
+        let lineRect = layoutManager.lineFragmentUsedRect(forGlyphAt: touchedChar, effectiveRange: &lineRange)
+        
+        guard lineRect.contains(location), let linkRanges = linkRanges else {
+            return nil
+        }
+        
+        // Find the word that was touched and call the detection block
+        for dictionary in linkRanges {
+            guard let range = dictionary[.range] as? NSRange else {
+                continue
+            }
+            
+            if touchedChar >= range.location && touchedChar < (range.location + range.length) {
+                return dictionary
+            }
+        }
+        
+        return nil
     }
+    
     // Applies background color to selected range. Used to hilight touched links
     private func setSelectedRange(range: NSRange) {
-//        // Remove the current selection if the selection is changing
-//        if (self.selectedRange.length && !NSEqualRanges(self.selectedRange, range))
-//        {
-//            [_textStorage removeAttribute:NSBackgroundColorAttributeName range:self.selectedRange];
-//        }
-//
-//        // Apply the new selection to the text
-//        if (range.length && _selectedLinkBackgroundColor != nil)
-//        {
-//            [_textStorage addAttribute:NSBackgroundColorAttributeName value:_selectedLinkBackgroundColor range:range];
-//        }
-//
-//        // Save the new range
-//        _selectedRange = range;
-//
-//        [self setNeedsDisplay];
+        // Remove the current selection if the selection is changing
+        if ((selectedRange.length != 0) && !NSEqualRanges(selectedRange, range)) {
+            textStorage?.removeAttribute(.backgroundColor, range: selectedRange)
+        }
+
+        // Apply the new selection to the text
+        if (range.length != 0),
+           let selectedLinkBackgroundColor = selectedLinkBackgroundColor {
+            textStorage?.addAttribute(.backgroundColor, value: selectedLinkBackgroundColor, range: range)
+        }
+
+        // Save the new range
+        selectedRange = range;
+
+        setNeedsDisplay();
     }
     
     open override var numberOfLines: Int {
@@ -144,13 +206,9 @@ open class KILabel: UILabel {
     
     open override var text: String? {
         didSet {
-//            if (!text)
-//            {
-//                text = @"";
-//            }
-//
-//            NSAttributedString *attributedText = [[NSAttributedString alloc] initWithString:text attributes:[self attributesFromProperties]];
-//            [self updateTextStoreWithAttributedString:attributedText];
+            let text = text ?? ""
+            let attributedText = NSAttributedString(string: text, attributes: attributesFromProperties())
+            updateTextStoreWithAttributedString(attributedString: attributedText)
         }
     }
     
@@ -162,33 +220,25 @@ open class KILabel: UILabel {
         }
     }
     
-//    - (NSDictionary*)attributesForLinkType:(KILinkType)linkType
-//    {
-//        NSDictionary *attributes = _linkTypeAttributes[@(linkType)];
-//
-//        if (!attributes)
-//        {
-//            attributes = @{NSForegroundColorAttributeName : self.tintColor};
-//        }
-//
-//        return attributes;
-//    }
-//
-//    - (void)setAttributes:(NSDictionary*)attributes forLinkType:(KILinkType)linkType
-//    {
-//        if (attributes)
-//        {
-//            _linkTypeAttributes[@(linkType)] = attributes;
-//        }
-//        else
-//        {
-//            [_linkTypeAttributes removeObjectForKey:@(linkType)];
-//        }
-//
-//        // Force refresh text
-//        self.text = self.text;
-//    }
+    private func attributesForLinkType(linkType: KILinkType) -> [NSAttributedString.Key: Any] {
+        guard let attributes = _linkTypeAttributes[linkType] as? [NSAttributedString.Key: Any] else {
+            return [.foregroundColor: tintColor ?? .black]
+        }
+        
+        return attributes
+    }
     
+    private func setAttributes(attributes: [NSAttributedString.Key: Any?]?, linkType: KILinkType) {
+        if let attributes = attributes {
+            _linkTypeAttributes[linkType] = attributes
+        } else {
+            _linkTypeAttributes.removeValue(forKey: linkType)
+        }
+        
+        // Force refresh text
+        text = text
+    }
+
     // MARK: - Text Storage Management
     
     private func updateTextStoreWithText() {
@@ -272,16 +322,17 @@ open class KILabel: UILabel {
     private func getRangesForLinks(text: NSAttributedString) -> [[LinkRangeKey: Any]] {
         var rangesForLinks: [[LinkRangeKey: Any]] = []
         
-        switch linkDetectionTypes {
-        case .userHandle:
+        if linkDetectionTypes.contains(.userHandle) {
             rangesForLinks.append(contentsOf: getRangesForUserHandles(text: text.string))
-        case .hashTag:
+        }
+        
+        if linkDetectionTypes.contains(.hashTag) {
             rangesForLinks.append(contentsOf: getRangesForHashtags(text: text.string))
-        case .url:
-            if let attributedText = attributedText {
-                rangesForLinks.append(contentsOf: getRangesForURLs(text: attributedText))
-            }
-        default: break
+        }
+        
+        if linkDetectionTypes.contains(.url),
+           let attributedText = attributedText {
+            rangesForLinks.append(contentsOf: getRangesForURLs(text: attributedText))
         }
         
         return rangesForLinks
@@ -380,9 +431,9 @@ open class KILabel: UILabel {
             }
             
             // TODO: 사용자 지정이 들어가는 것 같아..
-//            NSDictionary *attributes = [self attributesForLinkType:linkType];
-//            // Use our tint color to hilight the link
-//            [attributedString addAttributes:attributes range:range];
+            let attributes = attributesForLinkType(linkType: linkType)
+            // Use our tint color to hilight the link
+            attributedString.addAttributes(attributes, range: range)
             if systemURLStyle && linkType == KILinkType.url {
                 // Add a link attribute using the stored link
                 attributedString.addAttribute(.link, value: link, range: range)
@@ -395,67 +446,66 @@ open class KILabel: UILabel {
 
 // MARK: - Layout and Rendering
 extension KILabel {
-//    open override func textRect(forBounds bounds: CGRect, limitedToNumberOfLines numberOfLines: Int) -> CGRect {
-//        // Use our text container to calculate the bounds required. First save our
-//        // current text container setup
-//        CGSize savedTextContainerSize = _textContainer.size;
-//        NSInteger savedTextContainerNumberOfLines = _textContainer.maximumNumberOfLines;
-//
-//        // Apply the new potential bounds and number of lines
-//        _textContainer.size = bounds.size;
-//        _textContainer.maximumNumberOfLines = numberOfLines;
-//
-//        // Measure the text with the new state
-//        CGRect textBounds = [_layoutManager usedRectForTextContainer:_textContainer];
-//
-//        // Position the bounds and round up the size for good measure
-//        textBounds.origin = bounds.origin;
-//        textBounds.size.width = ceil(textBounds.size.width);
-//        textBounds.size.height = ceil(textBounds.size.height);
-//
-//        if (textBounds.size.height < bounds.size.height)
-//        {
-//            // Take verical alignment into account
-//            CGFloat offsetY = (bounds.size.height - textBounds.size.height) / 2.0;
-//            textBounds.origin.y += offsetY;
-//        }
-//
-//        // Restore the old container state before we exit under any circumstances
-//        _textContainer.size = savedTextContainerSize;
-//        _textContainer.maximumNumberOfLines = savedTextContainerNumberOfLines;
-//
-//        return textBounds;
-//    }
+    open override func textRect(forBounds bounds: CGRect, limitedToNumberOfLines numberOfLines: Int) -> CGRect {
+        // Use our text container to calculate the bounds required. First save our
+        // current text container setup
+        let savedTextContainerSize: CGSize = textContainer.size
+        let savedTextContainerNumberOfLines = textContainer.maximumNumberOfLines;
+
+        // Apply the new potential bounds and number of lines
+        textContainer.size = bounds.size;
+        textContainer.maximumNumberOfLines = numberOfLines;
+
+        // Measure the text with the new state
+        var textBounds = layoutManager.usedRect(for: textContainer)
+
+        // Position the bounds and round up the size for good measure
+        textBounds.origin = bounds.origin;
+        textBounds.size.width = ceil(textBounds.size.width);
+        textBounds.size.height = ceil(textBounds.size.height);
+
+        if textBounds.size.height < bounds.size.height {
+            // Take verical alignment into account
+            let offsetY: CGFloat = (bounds.size.height - textBounds.size.height) / 2.0;
+            textBounds.origin.y += offsetY;
+        }
+
+        // Restore the old container state before we exit under any circumstances
+        textContainer.size = savedTextContainerSize;
+        textContainer.maximumNumberOfLines = savedTextContainerNumberOfLines;
+
+        return textBounds;
+    }
     
-//    open override func drawText(in rect: CGRect) {
-//        // Don't call super implementation. Might want to uncomment this out when
-//        // debugging layout and rendering problems.
-//        // [super drawTextInRect:rect];
-//
-//        // Calculate the offset of the text in the view
-//        NSRange glyphRange = [_layoutManager glyphRangeForTextContainer:_textContainer];
-//        CGPoint glyphsPosition = [self calcGlyphsPositionInView];
-//
-//        // Drawing code
-//        [_layoutManager drawBackgroundForGlyphRange:glyphRange atPoint:glyphsPosition];
-//        [_layoutManager drawGlyphsForGlyphRange:glyphRange atPoint:glyphsPosition];
-//    }
+    open override func drawText(in rect: CGRect) {
+        // Don't call super implementation. Might want to uncomment this out when
+        // debugging layout and rendering problems.
+        // [super drawTextInRect:rect];
+
+        // Calculate the offset of the text in the view
+        let glyphRange: NSRange = layoutManager.glyphRange(for: textContainer)
+        let glyphsPosition: CGPoint = calcGlyphsPositionInView();
+
+        // Drawing code
+        layoutManager.drawBackground(forGlyphRange: glyphRange, at: glyphsPosition)
+        layoutManager.drawGlyphs(forGlyphRange: glyphRange, at: glyphsPosition)
+    }
     
-//    private func calcGlyphsPositionInView() -> CGPoint {
-//        CGPoint textOffset = CGPointZero;
-//
-//        CGRect textBounds = [_layoutManager usedRectForTextContainer:_textContainer];
-//        textBounds.size.width = ceil(textBounds.size.width);
-//        textBounds.size.height = ceil(textBounds.size.height);
-//
-//        if (textBounds.size.height < self.bounds.size.height)
-//        {
-//            CGFloat paddingHeight = (self.bounds.size.height - textBounds.size.height) / 2.0;
-//            textOffset.y = paddingHeight;
-//        }
-//
-//        return textOffset;
-//    }
+    private func calcGlyphsPositionInView() -> CGPoint {
+        var textOffset: CGPoint = .zero
+        
+        var textBounds: CGRect = layoutManager.usedRect(for: textContainer)
+        textBounds.size.width = ceil(textBounds.size.width);
+        textBounds.size.height = ceil(textBounds.size.height);
+
+        if (textBounds.size.height < bounds.size.height)
+        {
+            let paddingHeight: CGFloat = (bounds.size.height - textBounds.size.height) / 2.0;
+            textOffset.y = paddingHeight;
+        }
+
+        return textOffset;
+    }
     
     open override var frame: CGRect {
         didSet {
@@ -473,115 +523,88 @@ extension KILabel {
         super.layoutSubviews()
         textContainer.size = bounds.size;
     }
-    
-//    private func setIgnoredKeywords(ignoredKeywords: Set) {
-//        NSMutableSet *set = [NSMutableSet setWithCapacity:ignoredKeywords.count];
-//
-//        [ignoredKeywords enumerateObjectsUsingBlock:^(id obj, BOOL *stop) {
-//            [set addObject:[obj lowercaseString]];
-//        }];
-//
-//        _ignoredKeywords = [set copy];
-//    }
 }
 
 // MARK: - Interactions
 extension KILabel {
-//    open override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-//        _isTouchMoved = NO;
-//
-//        // Get the info for the touched link if there is one
-//        NSDictionary *touchedLink;
-//        CGPoint touchLocation = [[touches anyObject] locationInView:self];
-//        touchedLink = [self linkAtPoint:touchLocation];
-//
-//        if (touchedLink)
-//        {
-//            self.selectedRange = [[touchedLink objectForKey:KILabelRangeKey] rangeValue];
-//        }
-//        else
-//        {
-//            [super touchesBegan:touches withEvent:event];
-//        }
-//    }
+    open override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        isTouchMoved = false
+
+        // Get the info for the touched link if there is one
+        guard let touchLocation = touches.first?.location(in: self) else {
+            super.touchesBegan(touches, with: event)
+            return
+        }
+        if let touchedLink = linkAtPoint(location: touchLocation), let range = touchedLink[.range] as? NSRange {
+            selectedRange = range
+        } else {
+            super.touchesBegan(touches, with: event)
+        }
+    }
     
     open override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesMoved(touches, with: event)
         isTouchMoved = true
     }
     
-//    open override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-//        super.touchesEnded(touches, with: event)
-//        // If the user dragged their finger we ignore the touch
-//        if (_isTouchMoved)
-//        {
-//            self.selectedRange = NSMakeRange(0, 0);
-//
-//            return;
-//        }
-//
-//        // Get the info for the touched link if there is one
-//        NSDictionary *touchedLink;
-//        CGPoint touchLocation = [[touches anyObject] locationInView:self];
-//        touchedLink = [self linkAtPoint:touchLocation];
-//
-//        if (touchedLink)
-//        {
-//            NSRange range = [[touchedLink objectForKey:KILabelRangeKey] rangeValue];
-//            NSString *touchedSubstring = [touchedLink objectForKey:KILabelLinkKey];
-//            KILinkType linkType = (KILinkType)[[touchedLink objectForKey:KILabelLinkTypeKey] intValue];
-//
-//            [self receivedActionForLinkType:linkType string:touchedSubstring range:range];
-//        }
-//        else
-//        {
-//            [super touchesBegan:touches withEvent:event];
-//        }
-//
-//        self.selectedRange = NSMakeRange(0, 0);
-//    }
+    open override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesEnded(touches, with: event)
+        // If the user dragged their finger we ignore the touch
+        guard !isTouchMoved else {
+            selectedRange = .init(location: 0, length: 0)
+            return;
+        }
+
+        guard let touchLocation = touches.first?.location(in: self) else {
+            super.touchesBegan(touches, with: event)
+            return
+        }
+        
+        if let touchedLink = linkAtPoint(location: touchLocation),
+           let range = touchedLink[.range] as? NSRange,
+           let touchedSubstring = touchedLink[.link] as? String,
+           let linkType = touchedLink[.type] as? KILinkType {
+            receivedActionForLinkType(linkType: linkType, string: touchedSubstring, range: range)
+        } else {
+            super.touchesBegan(touches, with: event)
+        }
+        
+        selectedRange = .init(location: 0, length: 0)
+    }
     
     open override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesCancelled(touches, with: event)
         selectedRange = .init(location: 0, length: 0)
     }
     
-//    - (void)receivedActionForLinkType:(KILinkType)linkType string:(NSString*)string range:(NSRange)range
-//    {
-//        switch (linkType)
-//        {
-//        case KILinkTypeUserHandle:
-//            if (_userHandleLinkTapHandler)
-//            {
-//                _userHandleLinkTapHandler(self, string, range);
-//            }
-//            break;
-//
-//        case KILinkTypeHashtag:
-//            if (_hashtagLinkTapHandler)
-//            {
-//                _hashtagLinkTapHandler(self, string, range);
-//            }
-//            break;
-//
-//        case KILinkTypeURL:
-//            if (_urlLinkTapHandler)
-//            {
-//                _urlLinkTapHandler(self, string, range);
-//            }
-//            break;
-//        }
-//    }
+    private func receivedActionForLinkType(linkType: KILinkType, string: String, range: NSRange) {
+        switch linkType {
+        case .userHandle:
+            if let handler = userHandleLinkTapHandler {
+                handler(self, string, range)
+            }
+        case .hashTag:
+            if let handler = hashtagLinkTapHandler {
+                handler(self, string, range)
+            }
+        case .url:
+            if let handler = urlLinkTapHandler {
+                handler(self, string, range)
+            }
+        }
+    }
 }
 
 extension KILabel: NSLayoutManagerDelegate {
-//    public func layoutManager(_ layoutManager: NSLayoutManager, shouldBreakLineByWordBeforeCharacterAt charIndex: Int) -> Bool {
-//        // Don't allow line breaks inside URLs
-//        NSRange range;
-//        NSURL *linkURL = [layoutManager.textStorage attribute:NSLinkAttributeName atIndex:charIndex effectiveRange:&range];
-//
-//        return !(linkURL && (charIndex > range.location) && (charIndex <= NSMaxRange(range)));
-//    }
+    public func layoutManager(_ layoutManager: NSLayoutManager, shouldBreakLineByWordBeforeCharacterAt charIndex: Int) -> Bool {
+        // Don't allow line breaks inside URLs
+        var range: NSRange = .init(location: 0, length: 0)
+        guard let _ = layoutManager.textStorage?.attribute(.link, at: charIndex, effectiveRange: &range) as? URL else {
+            return false
+        }
+        
+        return !((charIndex > range.location) && (charIndex <= NSMaxRange(range)));
+    }
     
     // TODO: 확인 필요.
     static func sanitizeAttributedString(attributedString: NSAttributedString) -> NSAttributedString {
